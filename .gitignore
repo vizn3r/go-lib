@@ -1,0 +1,13 @@
+# Cloud
+.env
+*test.sh
+*storage*
+
+# Unneccesary test files
+**/test/
+**/*test.*
+!**/*_test.go
+
+# UI
+.svelte-kit
+node_modules
