@@ -7,7 +7,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/vizn3r/cloud/lib/logger"
+	"github.com/vizn3r/go-lib/logger"
 	"gopkg.in/yaml.v3"
 )
 
