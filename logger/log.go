@@ -72,6 +72,23 @@ const (
 
 // New creates a new async Logger for a module
 func New(module string, color Color, writers ...io.Writer) *Logger {
+	levelStr := os.Getenv("LOGGER_LEVEL")
+	level := LevelInfo
+	if levelStr != "" {
+		switch levelStr {
+		case "debug":
+			level = LevelDebug
+		case "info":
+			level = LevelInfo
+		case "warn":
+			level = LevelWarn
+		case "error":
+			level = LevelError
+		case "fatal":
+			level = LevelFatal
+		}
+	}
+
 	out := io.MultiWriter(os.Stdout)
 	if len(writers) > 0 {
 		out = io.MultiWriter(writers...)
@@ -82,7 +99,7 @@ func New(module string, color Color, writers ...io.Writer) *Logger {
 		l:           log.New(out, prefix, log.LstdFlags),
 		logCh:       make(chan logMessage, 100), // buffered channel
 		done:        make(chan struct{}),
-		maxLogLevel: LevelInfo,
+		maxLogLevel: level,
 		printTime:   true,
 		color:       color,
 		module:      module,
