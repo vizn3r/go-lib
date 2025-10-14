@@ -72,7 +72,7 @@ const (
 	LevelFatal
 )
 
-// New creates a new async Logger for a module
+// New creates a new async logger
 func New(module string, color Color, writers ...io.Writer) *Logger {
 	levelStr := os.Getenv("LOGGER_LEVEL")
 	level := LevelPrint
@@ -95,6 +95,8 @@ func New(module string, color Color, writers ...io.Writer) *Logger {
 		}
 	}
 
+	sync := os.Getenv("LOGGER_SYNC") == "true"
+
 	out := io.MultiWriter(os.Stdout)
 	if len(writers) > 0 {
 		out = io.MultiWriter(writers...)
@@ -107,6 +109,7 @@ func New(module string, color Color, writers ...io.Writer) *Logger {
 		done:        make(chan struct{}),
 		maxLogLevel: level,
 		printTime:   true,
+		sync:        sync,
 		color:       color,
 		module:      module,
 	}
@@ -142,23 +145,7 @@ func (lg *Logger) run() {
 		if m.level < lg.maxLogLevel {
 			continue
 		}
-		switch m.level {
-		case LevelInfo:
-			lg.l.Printf(fmt.Sprintf("%s[INFO]%s %s", Blue, Reset, m.msg))
-		case LevelWarn:
-			lg.l.Printf(fmt.Sprintf("%s[WARN]%s %s", Yellow, Reset, m.msg))
-		case LevelError:
-			lg.l.Printf(fmt.Sprintf("%s[ERROR]%s %s", Red, Reset, m.msg))
-		case LevelDebug:
-			lg.l.Printf(fmt.Sprintf("%s[DEBUG]%s %s", Grey, Reset, m.msg))
-		case LevelFatal:
-			lg.l.Printf(fmt.Sprintf("%s[FATAL]%s %s", Red, Reset, m.msg))
-			os.Exit(1)
-		case LevelPrint:
-			lg.l.Printf("%s%s", Reset, colorString(m.msg))
-		default:
-			lg.l.Printf("%s%s", Reset, m.msg)
-		}
+		lg.printer(m)
 	}
 	close(lg.done)
 }
@@ -176,10 +163,8 @@ func (lg *Logger) printer(m logMessage) {
 	case LevelFatal:
 		lg.l.Printf(fmt.Sprintf("%s[FATAL]%s %s", Red, Reset, m.msg))
 		os.Exit(1)
-	case LevelPrint:
-		lg.l.Printf("%s%s", Reset, colorString(m.msg))
 	default:
-		lg.l.Printf("%s%s", Reset, m.msg)
+		lg.l.Printf("%s%s", Reset, colorString(m.msg))
 	}
 }
 
