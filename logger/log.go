@@ -56,26 +56,30 @@ type Logger struct {
 
 	printTime   bool
 	maxLogLevel LogLevel
+	sync        bool
 
 	color  Color
 	module string
 }
 
 const (
-	LevelDebug LogLevel = iota
+	LevelDisabled LogLevel = iota - 1
+	LevelPrint
+	LevelDebug
 	LevelInfo
 	LevelWarn
 	LevelError
 	LevelFatal
-	LevelPrint
 )
 
 // New creates a new async Logger for a module
 func New(module string, color Color, writers ...io.Writer) *Logger {
 	levelStr := os.Getenv("LOGGER_LEVEL")
-	level := LevelInfo
+	level := LevelPrint
 	if levelStr != "" {
 		switch levelStr {
+		case "disabled", "none", "off":
+			level = LevelDisabled
 		case "debug":
 			level = LevelDebug
 		case "info":
@@ -86,6 +90,8 @@ func New(module string, color Color, writers ...io.Writer) *Logger {
 			level = LevelError
 		case "fatal":
 			level = LevelFatal
+		case "all":
+			level = LevelPrint
 		}
 	}
 
@@ -113,6 +119,10 @@ func New(module string, color Color, writers ...io.Writer) *Logger {
 
 func (lg *Logger) SetLevel(level LogLevel) {
 	lg.maxLogLevel = level
+}
+
+func (lg *Logger) SetSync(sync bool) {
+	lg.sync = sync
 }
 
 func (lg *Logger) SetPrintTime(print bool) {
@@ -153,38 +163,66 @@ func (lg *Logger) run() {
 	close(lg.done)
 }
 
+func (lg *Logger) printer(m logMessage) {
+	switch m.level {
+	case LevelInfo:
+		lg.l.Printf(fmt.Sprintf("%s[INFO]%s %s", Blue, Reset, m.msg))
+	case LevelWarn:
+		lg.l.Printf(fmt.Sprintf("%s[WARN]%s %s", Yellow, Reset, m.msg))
+	case LevelError:
+		lg.l.Printf(fmt.Sprintf("%s[ERROR]%s %s", Red, Reset, m.msg))
+	case LevelDebug:
+		lg.l.Printf(fmt.Sprintf("%s[DEBUG]%s %s", Grey, Reset, m.msg))
+	case LevelFatal:
+		lg.l.Printf(fmt.Sprintf("%s[FATAL]%s %s", Red, Reset, m.msg))
+		os.Exit(1)
+	case LevelPrint:
+		lg.l.Printf("%s%s", Reset, colorString(m.msg))
+	default:
+		lg.l.Printf("%s%s", Reset, m.msg)
+	}
+}
+
 // Log pushes a message to the log channel
 func (lg *Logger) Log(level LogLevel, v ...any) {
-	lg.logCh <- logMessage{level: level, msg: fmt.Sprint(v...)}
+	m := logMessage{level: level, msg: fmt.Sprint(v...)}
+	if lg.sync {
+		if level < lg.maxLogLevel {
+			return
+		}
+		lg.printer(m)
+		return
+	}
+	lg.logCh <- m
 }
 
 // Info pushes a message to the log channel
 func (lg *Logger) Info(v ...any) {
-	lg.logCh <- logMessage{level: LevelInfo, msg: fmt.Sprint(v...)}
+	lg.Log(LevelInfo, v...)
 }
 
 // Warn pushes a message to the log channel
 func (lg *Logger) Warn(v ...any) {
-	lg.logCh <- logMessage{level: LevelWarn, msg: fmt.Sprint(v...)}
+	lg.Log(LevelWarn, v...)
 }
 
 // Error pushes a message to the log channel
 func (lg *Logger) Error(v ...any) {
-	lg.logCh <- logMessage{level: LevelError, msg: fmt.Sprint(v...)}
+	lg.Log(LevelError, v...)
 }
 
 func (lg *Logger) Debug(v ...any) {
-	lg.logCh <- logMessage{level: LevelDebug, msg: fmt.Sprint(v...)}
+	lg.Log(LevelDebug, v...)
 }
 
 // Print pushes a colored message to the log channel
 func (lg *Logger) Print(v ...any) {
-	lg.logCh <- logMessage{level: LevelPrint, msg: fmt.Sprint(v...)}
+	lg.Log(LevelPrint, v...)
 }
 
 // Fatal pushes a message to the log channel and exits
 func (lg *Logger) Fatal(v ...any) {
-	lg.logCh <- logMessage{level: LevelFatal, msg: fmt.Sprint(v...)}
+	lg.Log(LevelFatal, v...)
 }
 
 func Hyperlink(url string, v ...any) string {
