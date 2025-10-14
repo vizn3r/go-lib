@@ -5,22 +5,37 @@ import (
 	"io"
 	"log"
 	"os"
+	"regexp"
+	"strconv"
 	"strings"
+	"sync"
 )
 
 // ANSI colors
 type Color string
 
 const (
-	Reset   Color = "\033[0m"
+	Reset Color = "\033[0m"
+
+	// Regular colors
+	Black   Color = "\033[30m"
 	Red     Color = "\033[31m"
 	Green   Color = "\033[32m"
 	Yellow  Color = "\033[33m"
 	Blue    Color = "\033[34m"
-	Purple  Color = "\033[35m"
 	Magenta Color = "\033[35m"
-	Grey    Color = "\033[90m"
 	Cyan    Color = "\033[36m"
+	White   Color = "\033[37m"
+	Grey    Color = "\033[90m"
+
+	// Bright colors
+	BrightRed     Color = "\033[91m"
+	BrightGreen   Color = "\033[92m"
+	BrightYellow  Color = "\033[93m"
+	BrightBlue    Color = "\033[94m"
+	BrightMagenta Color = "\033[95m"
+	BrightCyan    Color = "\033[96m"
+	BrightWhite   Color = "\033[97m"
 )
 
 // Highlight keywords
@@ -30,13 +45,17 @@ var highlights = map[string]Color{
 	"FAIL":  Red,
 
 	// HTTP Methods
-	"GET":     Blue,
-	"POST":    Cyan,
+	"GET":     Green,
+	"POST":    Blue,
 	"PUT":     Yellow,
-	"DELETE":  Purple,
+	"DELETE":  Cyan,
 	"PATCH":   Magenta,
 	"OPTIONS": Cyan,
 	"HEAD":    Blue,
+
+	// Errors
+	"error": Red,
+	"Error": Red,
 }
 
 type LogLevel int
@@ -57,6 +76,7 @@ type Logger struct {
 	printTime   bool
 	maxLogLevel LogLevel
 	sync        bool
+	colorOutput bool
 
 	color  Color
 	module string
@@ -72,10 +92,33 @@ const (
 	LevelFatal
 )
 
+var colorRegex *regexp.Regexp
+
+func init() {
+	words := make([]string, 0, len(highlights))
+	for w := range highlights {
+		words = append(words, regexp.QuoteMeta(w))
+	}
+
+	// Add regex pattern for numbers (integers, floats, hex)
+	numberPattern := `\b\d+(\.\d+)?\b|0x[0-9A-Fa-f]+`
+
+	// Combine words and number pattern
+	allPatterns := append(words, numberPattern)
+
+	colorRegex = regexp.MustCompile(strings.Join(allPatterns, "|"))
+}
+
 // New creates a new async logger
 func New(module string, color Color, writers ...io.Writer) *Logger {
-	levelStr := os.Getenv("LOGGER_LEVEL")
+	// Defaults
+	sync := false
+	printTime := true
 	level := LevelPrint
+	colorOutput := true
+	fast := false
+
+	levelStr := os.Getenv("LOGGER_LEVEL")
 	if levelStr != "" {
 		switch levelStr {
 		case "disabled", "none", "off":
@@ -95,7 +138,29 @@ func New(module string, color Color, writers ...io.Writer) *Logger {
 		}
 	}
 
-	sync := os.Getenv("LOGGER_SYNC") == "true"
+	sync, err := strconv.ParseBool(os.Getenv("LOGGER_SYNC"))
+	if err != nil {
+		sync = false
+	}
+	printTime, err = strconv.ParseBool(os.Getenv("LOGGER_TIME"))
+	if err != nil {
+		printTime = true
+	}
+	colorOutput, err = strconv.ParseBool(os.Getenv("LOGGER_COLORS"))
+	if err != nil {
+		colorOutput = true
+	}
+	fast, err = strconv.ParseBool(os.Getenv("LOGGER_FAST"))
+	if err != nil {
+		fast = false
+	}
+
+	if fast {
+		level = LevelPrint
+		sync = true
+		printTime = false
+		colorOutput = false
+	}
 
 	out := io.MultiWriter(os.Stdout)
 	if len(writers) > 0 {
@@ -103,19 +168,33 @@ func New(module string, color Color, writers ...io.Writer) *Logger {
 	}
 
 	prefix := fmt.Sprintf("%s[%s]%s ", color, module, Grey)
+	if !colorOutput {
+		prefix = fmt.Sprintf("[%s] ", module)
+	}
 	lg := &Logger{
 		l:           log.New(out, prefix, log.LstdFlags),
 		logCh:       make(chan logMessage, 100), // buffered channel
 		done:        make(chan struct{}),
 		maxLogLevel: level,
-		printTime:   true,
+		printTime:   printTime,
 		sync:        sync,
+		colorOutput: colorOutput,
 		color:       color,
 		module:      module,
 	}
 
 	// start logger goroutine
-	go lg.run()
+	if !sync {
+		go lg.run()
+	}
+
+	if !lg.printTime {
+		lg.l.SetFlags(0)
+	} else {
+		prefix := fmt.Sprintf("%s[%s]%s ", lg.color, lg.module, Grey)
+		lg.l.SetPrefix(prefix)
+		lg.l.SetFlags(log.LstdFlags)
+	}
 
 	return lg
 }
@@ -128,15 +207,12 @@ func (lg *Logger) SetSync(sync bool) {
 	lg.sync = sync
 }
 
+func AddHighlight(word string, color Color) {
+	highlights[word] = color
+}
+
 func (lg *Logger) SetPrintTime(print bool) {
 	lg.printTime = print
-	if !print {
-		lg.l.SetFlags(0)
-	} else {
-		prefix := fmt.Sprintf("%s[%s]%s ", lg.color, lg.module, Grey)
-		lg.l.SetPrefix(prefix)
-		lg.l.SetFlags(log.LstdFlags)
-	}
 }
 
 // run listens on the channel and prints messages
@@ -151,34 +227,76 @@ func (lg *Logger) run() {
 }
 
 func (lg *Logger) printer(m logMessage) {
+	if m.level < lg.maxLogLevel {
+		return
+	}
+
+	msg := m.msg
+	if lg.colorOutput {
+		msg = colorString(msg) // color the content
+	}
+
 	switch m.level {
 	case LevelInfo:
-		lg.l.Printf(fmt.Sprintf("%s[INFO]%s %s", Blue, Reset, m.msg))
+		if lg.colorOutput {
+			lg.l.Printf("%s[I]%s   %s", Blue, Reset, msg)
+		} else {
+			lg.l.Printf("[I]   %s", msg)
+		}
 	case LevelWarn:
-		lg.l.Printf(fmt.Sprintf("%s[WARN]%s %s", Yellow, Reset, m.msg))
+		if lg.colorOutput {
+			lg.l.Printf("%s[W] ? %s%s", Yellow, Reset, msg)
+		} else {
+			lg.l.Printf("[W] ? %s", msg)
+		}
 	case LevelError:
-		lg.l.Printf(fmt.Sprintf("%s[ERROR]%s %s", Red, Reset, m.msg))
+		if lg.colorOutput {
+			lg.l.Printf("%s<E> ! %s%s", Red, Reset, msg)
+		} else {
+			lg.l.Printf("<E> ! %s", msg)
+		}
 	case LevelDebug:
-		lg.l.Printf(fmt.Sprintf("%s[DEBUG]%s %s", Grey, Reset, m.msg))
+		if lg.colorOutput {
+			lg.l.Printf("%s[D]%s   %s", Grey, Reset, msg)
+		} else {
+			lg.l.Printf("[D]   %s", msg)
+		}
 	case LevelFatal:
-		lg.l.Printf(fmt.Sprintf("%s[FATAL]%s %s", Red, Reset, m.msg))
+		if lg.colorOutput {
+			lg.l.Printf("%s<F>!!! %s%s", Red, Reset, msg)
+		} else {
+			lg.l.Printf("<F>!!! %s", msg)
+		}
 		os.Exit(1)
 	default:
-		lg.l.Printf("%s%s", Reset, colorString(m.msg))
+		lg.l.Printf("%s", msg)
 	}
+}
+
+var msgPool = sync.Pool{
+	New: func() any {
+		return new(logMessage)
+	},
 }
 
 // Log pushes a message to the log channel
 func (lg *Logger) Log(level LogLevel, v ...any) {
-	m := logMessage{level: level, msg: fmt.Sprint(v...)}
-	if lg.sync {
-		if level < lg.maxLogLevel {
-			return
-		}
-		lg.printer(m)
+	if level < lg.maxLogLevel {
 		return
 	}
-	lg.logCh <- m
+	m := msgPool.Get().(*logMessage)
+	m.level = level
+	m.msg = colorString(fmt.Sprint(v...))
+
+	if !lg.colorOutput {
+		m.msg = fmt.Sprint(v...)
+	}
+	if lg.sync {
+		lg.printer(*m)
+	} else {
+		lg.logCh <- *m
+	}
+	msgPool.Put(m)
 }
 
 // Info pushes a message to the log channel
@@ -225,8 +343,10 @@ func (lg *Logger) Close() {
 
 // colorString replaces keywords with colored versions
 func colorString(s string) string {
-	for word, color := range highlights {
-		s = strings.ReplaceAll(s, word, fmt.Sprintf("%s%s%s", color, word, Reset))
-	}
-	return s
+	return colorRegex.ReplaceAllStringFunc(s, func(match string) string {
+		if color, ok := highlights[match]; ok {
+			return string(color) + match + string(Reset)
+		}
+		return string(Cyan) + match + string(Reset) // fallback for numbers
+	})
 }
