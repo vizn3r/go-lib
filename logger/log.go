@@ -186,6 +186,8 @@ func New(module string, color Color, writers ...io.Writer) *Logger {
 	// start logger goroutine
 	if !sync {
 		go lg.run()
+	} else {
+		lg.closed = true
 	}
 
 	if !lg.printTime {
