@@ -341,6 +341,10 @@ func (lg *Logger) Close() {
 	}
 }
 
+func ColorString(c Color, s ...any) string {
+	return fmt.Sprintf("%s%s%s", c, fmt.Sprint(s...), Reset)
+}
+
 // colorString replaces keywords with colored versions
 func colorString(s string) string {
 	return colorRegex.ReplaceAllStringFunc(s, func(match string) string {
