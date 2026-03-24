@@ -7,7 +7,6 @@ import (
 	"os"
 	"regexp"
 	"strconv"
-	"strings"
 	"sync"
 )
 
@@ -38,27 +37,11 @@ const (
 	BrightWhite   Color = "\033[97m"
 )
 
-// Highlight keywords
-var highlights = map[string]Color{
-	"OK":    Green,
-	"ERROR": Red,
-	"FAIL":  Red,
-
-	// HTTP Methods
-	"GET":     Green,
-	"POST":    Blue,
-	"PUT":     Yellow,
-	"DELETE":  Cyan,
-	"PATCH":   Magenta,
-	"OPTIONS": Cyan,
-	"HEAD":    Blue,
-
-	// Errors
-	"error": Red,
-	"Error": Red,
+// Highlighter pairs a regex pattern with a color
+type Highlighter struct {
+	Pattern *regexp.Regexp
+	Color   Color
 }
-
-type LogLevel int
 
 // Log message struct for channel
 type logMessage struct {
@@ -82,6 +65,8 @@ type Logger struct {
 	module string
 }
 
+type LogLevel int
+
 const (
 	LevelDisabled LogLevel = iota - 1
 	LevelPrint
@@ -92,22 +77,52 @@ const (
 	LevelFatal
 )
 
-var colorRegex *regexp.Regexp
 var loggers map[string]*Logger
 
+var highlighters []Highlighter
+
+// Default highlights
 func init() {
-	words := make([]string, 0, len(highlights))
-	for w := range highlights {
-		words = append(words, regexp.QuoteMeta(w))
+	// Keywords
+	keywords := map[string]Color{
+		"OK":    Green,
+		"ERROR": Red,
+		"FAIL":  Red,
+
+		// HTTP Methods
+		"GET":     Green,
+		"POST":    Blue,
+		"PUT":     Yellow,
+		"DELETE":  Cyan,
+		"PATCH":   Magenta,
+		"OPTIONS": Cyan,
+		"HEAD":    Blue,
+
+		// Errors
+		"error": Red,
+		"Error": Red,
 	}
 
-	// Add regex pattern for numbers (integers, floats, hex)
-	numberPattern := `\b\d+(\.\d+)?\b|0x[0-9A-Fa-f]+`
+	for word, color := range keywords {
+		highlighters = append(highlighters, Highlighter{
+			Pattern: regexp.MustCompile(`\b` + regexp.QuoteMeta(word) + `\b`),
+			Color:   color,
+		})
+	}
 
-	// Combine words and number pattern
-	allPatterns := append(words, numberPattern)
+	// Strings (double-quoted and single-quoted)
+	AddHighlighter(`"[^"]*"|'[^']*'`, Yellow)
 
-	colorRegex = regexp.MustCompile(strings.Join(allPatterns, "|"))
+	// Numbers (integers, floats, hex)
+	AddHighlighter(`0x[0-9A-Fa-f]+|\b\d+\.\d+|\b\d+\b`, Cyan)
+}
+
+// AddHighlighter adds a regex pattern with a color to the highlighter list
+func AddHighlighter(pattern string, color Color) {
+	highlighters = append(highlighters, Highlighter{
+		Pattern: regexp.MustCompile(pattern),
+		Color:   color,
+	})
 }
 
 // New creates a new async logger
@@ -235,7 +250,7 @@ func (lg *Logger) SetSync(sync bool) {
 }
 
 func AddHighlight(word string, color Color) {
-	highlights[word] = color
+	AddHighlighter(`\b`+regexp.QuoteMeta(word)+`\b`, color)
 }
 
 func (lg *Logger) SetPrintTime(print bool) {
@@ -372,12 +387,12 @@ func ColorString(c Color, s ...any) string {
 	return fmt.Sprintf("%s%s%s", c, fmt.Sprint(s...), Reset)
 }
 
-// colorString replaces keywords with colored versions
+// colorString applies all highlighters in order
 func colorString(s string) string {
-	return colorRegex.ReplaceAllStringFunc(s, func(match string) string {
-		if color, ok := highlights[match]; ok {
-			return string(color) + match + string(Reset)
-		}
-		return string(Cyan) + match + string(Reset) // fallback for numbers
-	})
+	for _, h := range highlighters {
+		s = h.Pattern.ReplaceAllStringFunc(s, func(match string) string {
+			return string(h.Color) + match + string(Reset)
+		})
+	}
+	return s
 }
