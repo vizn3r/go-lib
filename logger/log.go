@@ -93,6 +93,7 @@ const (
 )
 
 var colorRegex *regexp.Regexp
+var loggers map[string]*Logger
 
 func init() {
 	words := make([]string, 0, len(highlights))
@@ -117,6 +118,7 @@ func New(module string, color Color, writers ...io.Writer) *Logger {
 	level := LevelPrint
 	colorOutput := true
 	fast := false
+	global := true
 
 	levelStr := os.Getenv("LOGGER_LEVEL")
 	if levelStr != "" {
@@ -154,12 +156,21 @@ func New(module string, color Color, writers ...io.Writer) *Logger {
 	if err != nil {
 		fast = false
 	}
+	global, err = strconv.ParseBool(os.Getenv("LOGGER_GLOBAL"))
+	if err != nil {
+		global = false
+	}
 
 	if fast {
 		level = LevelPrint
 		sync = true
 		printTime = false
 		colorOutput = false
+		global = false
+	}
+
+	if global {
+		loggers = make(map[string]*Logger)
 	}
 
 	out := io.MultiWriter(os.Stdout)
@@ -183,6 +194,10 @@ func New(module string, color Color, writers ...io.Writer) *Logger {
 		module:      module,
 	}
 
+	if global {
+		loggers[module] = lg
+	}
+
 	// start logger goroutine
 	if !sync {
 		go lg.run()
@@ -199,6 +214,16 @@ func New(module string, color Color, writers ...io.Writer) *Logger {
 	}
 
 	return lg
+}
+
+func GetLogger(module string) *Logger {
+	return loggers[module]
+}
+
+func CloseAll() {
+	for _, lg := range loggers {
+		lg.Close()
+	}
 }
 
 func (lg *Logger) SetLevel(level LogLevel) {
