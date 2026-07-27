@@ -7,6 +7,7 @@ import (
 	"os"
 	"regexp"
 	"strconv"
+	"strings"
 	"sync"
 )
 
@@ -60,9 +61,14 @@ type Logger struct {
 	maxLogLevel LogLevel
 	sync        bool
 	colorOutput bool
+	stackLogs   bool
 
 	color  Color
 	module string
+
+	lastMsg   string
+	lastLevel LogLevel
+	lastCount int
 }
 
 type LogLevel int
@@ -175,6 +181,10 @@ func New(module string, color Color, writers ...io.Writer) *Logger {
 	if err != nil {
 		global = false
 	}
+	stackLogs, err := strconv.ParseBool(os.Getenv("LOGGER_STACK"))
+	if err != nil {
+		stackLogs = false
+	}
 
 	if fast {
 		level = LevelPrint
@@ -205,6 +215,7 @@ func New(module string, color Color, writers ...io.Writer) *Logger {
 		printTime:   printTime,
 		sync:        sync,
 		colorOutput: colorOutput,
+		stackLogs:   stackLogs,
 		color:       color,
 		module:      module,
 	}
@@ -257,6 +268,14 @@ func (lg *Logger) SetPrintTime(print bool) {
 	lg.printTime = print
 }
 
+func (lg *Logger) SetStackLogs(stack bool) {
+	lg.stackLogs = stack
+	if !stack {
+		lg.lastMsg = ""
+		lg.lastCount = 0
+	}
+}
+
 // run listens on the channel and prints messages
 func (lg *Logger) run() {
 	for m := range lg.logCh {
@@ -267,7 +286,6 @@ func (lg *Logger) run() {
 	}
 	close(lg.done)
 }
-
 func (lg *Logger) printer(m logMessage) {
 	if m.level < lg.maxLogLevel {
 		return
@@ -276,6 +294,18 @@ func (lg *Logger) printer(m logMessage) {
 	msg := m.msg
 	if lg.colorOutput {
 		msg = colorString(msg) // color the content
+	}
+
+	if lg.stackLogs {
+		if m.level == lg.lastLevel && m.msg == lg.lastMsg && lg.lastCount > 0 {
+			lg.lastCount++
+			fmt.Fprint(lg.l.Writer(), "\033[A\033[K")
+			msg = strings.TrimSuffix(msg, "\n") + fmt.Sprintf(" [x%d]\n", lg.lastCount)
+		} else {
+			lg.lastMsg = m.msg
+			lg.lastLevel = m.level
+			lg.lastCount = 1
+		}
 	}
 
 	switch m.level {
@@ -328,7 +358,7 @@ func (lg *Logger) Log(level LogLevel, v ...any) {
 	}
 	m := msgPool.Get().(*logMessage)
 	m.level = level
-	m.msg = colorString(fmt.Sprint(v...))
+	m.msg = colorString(fmt.Sprintln(v...))
 
 	if !lg.colorOutput {
 		m.msg = fmt.Sprint(v...)
