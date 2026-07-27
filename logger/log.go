@@ -183,7 +183,7 @@ func New(module string, color Color, writers ...io.Writer) *Logger {
 	}
 	stackLogs, err := strconv.ParseBool(os.Getenv("LOGGER_STACK"))
 	if err != nil {
-		stackLogs = false
+		stackLogs = true
 	}
 
 	if fast {
